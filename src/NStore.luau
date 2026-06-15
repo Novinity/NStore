@@ -5,15 +5,15 @@ local Signal = require(script.Signal)
 
 export type Profile<T> = Profile.Profile<T>
 
-local Artemis = {}
-Artemis.__index = Artemis
+local NStore = {}
+NStore.__index = NStore
 
-export type Artemis<TData> = {
+export type NStore<TData> = {
 	DataStore: DataStore,
 	Template: TData,
 	AutoSaveInterval: number,
 	
-	StartSession: (self: Artemis<TData>, key: string, functions: {Cancel: (() -> boolean)?}) -> Profile<TData>?,
+	StartSession: (self: NStore<TData>, key: string, functions: {Cancel: (() -> boolean)?}) -> Profile<TData>?,
 }
 
 local function _deepCloneTable(tbl)
@@ -28,8 +28,8 @@ local function _deepCloneTable(tbl)
 	return clone
 end
 
-function Artemis.new(name: string, template: {}, autoSaveInterval: number?)
-	local self = setmetatable({}, Artemis)
+function NStore.new(name: string, template: {}, autoSaveInterval: number?)
+	local self = setmetatable({}, NStore)
 	
 	local DS = DataStoreService:GetDataStore(name)
 	
@@ -37,12 +37,12 @@ function Artemis.new(name: string, template: {}, autoSaveInterval: number?)
 	self.Template = template
 	self.AutoSaveInterval = autoSaveInterval or 300
 	
-	print(`New Artemis instance initialized: {name}`)
+	print(`New NStore instance initialized: {name}`)
 	
 	return self
 end
 
-function Artemis:StartSession(key: string, functions: {})
+function NStore:StartSession(key: string, functions: {})
 	if Profile.LoadedProfiles[key] then
 		warn("Profile already loaded for key: " .. key)
 		return
@@ -90,4 +90,4 @@ function Artemis:StartSession(key: string, functions: {})
 	end
 end
 
-return Artemis
+return NStore
