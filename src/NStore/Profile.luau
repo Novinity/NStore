@@ -137,7 +137,7 @@ function Profile.new(key: string, data: {}, instance)
 			data.MetaData = data.MetaData or {}
 			
 			if data.MetaData.SessionJobId ~= nil and data.MetaData.SessionJobId ~= game.JobId then
-				warn("Session is currently locked.")
+				warn(`Session for profile {key} is currently locked.`)
 				return
 			end
 
@@ -152,7 +152,7 @@ function Profile.new(key: string, data: {}, instance)
 		end)
 	end)
 	if not success or not result then
-		warn("Failed to load profile")
+		warn(`Failed to load profile {key}: {result}`)
 		return nil
 	end
 
@@ -168,19 +168,18 @@ end
 function Profile:AddUserId(userId: number)
 	local idx = table.find(self.UserIds, userId)
 	if idx then return end
-	print(`Adding user id {userId}`)
+	
 	table.insert(self.UserIds, userId)
 end
 
 function Profile:RemoveUserId(userId: number)
 	local idx = table.find(self.UserIds, userId)
 	if not idx then return end
-	print(`Removing user id {userId}`)
+
 	table.remove(self.UserIds, idx)
 end
 
 function Profile:Reconcile()
-	print("Reconciling...")
 	local reconciled = _reconcileTable(self.Data, self.DataStore.Template)
 	self.Data = reconciled
 end
@@ -189,7 +188,6 @@ function Profile:EndSession()
 	if self.SessionEnded then
 		return
 	end
-	print("Ending session")
 	
 	self.SessionEnded = true
 	self.OnSessionEnd:Fire()
@@ -221,7 +219,7 @@ function Profile:Save(unlock: boolean?)
 		end)
 	end)
 	if not success or not response then
-		warn(response)
+		warn(`Failed to save profile {self.Key}: {response}`)
 		return false
 	end
 	return true

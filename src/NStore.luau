@@ -1,3 +1,15 @@
+--[[
+	NStore -- A basic Roblox datastore wrapper heavily inspired by ProfileStore
+	Author: Novinity
+
+	Features:
+	- Data saving/loading
+	- Code autocompletion
+	- Data autosaving
+	- Session locking
+	- Data reconciliation
+]]
+
 local DataStoreService = game:GetService("DataStoreService")
 
 local Profile = require(script.Profile)
@@ -48,10 +60,8 @@ function NStore:StartSession(key: string, functions: {})
 		return
 	end
 	
-	print(`Starting session for {key}`)
 	local cancelFunc = functions.Cancel
 	if cancelFunc and cancelFunc() then
-		warn("Cancelled session start by user-input function")
 		return
 	end
 	
@@ -64,8 +74,6 @@ function NStore:StartSession(key: string, functions: {})
 			if data.SessionJobId ~= nil and data.SessionJobId ~= JobId then
 				return nil
 			end
-			
-			print("Current SessionJobId: " .. tostring(data.SessionJobId))
 			
 			if not data or not data.Data then
 				local template = _deepCloneTable(Profile.PROFILE_TEMPLATE)
@@ -83,8 +91,6 @@ function NStore:StartSession(key: string, functions: {})
 		end)
 	end)
 	if success and loadedData then
-		print("Loading profile...")
-		print(Profile)
 		Profile.LoadedProfiles[key] = loadedData
 		return Profile.new(key, loadedData, self)
 	end
