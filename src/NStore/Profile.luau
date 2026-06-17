@@ -109,7 +109,7 @@ local function _runChangedCheck(profile, interval: number)
 	-- Go through the table and call each key's changed signal if it has one
 	local function callChangedPerValue(tbl, c, directory: string?)
 		for key, value in pairs(tbl) do
-			if typeof(value) == "table" then
+			if typeof(value) == "table" and typeof(c[key]) == "table" then
 				callChangedPerValue(value, c[key], directory and `{directory}.{key}` or key)
 			elseif c[key] ~= value then
 				-- Get and call signal
@@ -188,39 +188,6 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 
 	if not mock then
 		self.MetaData.SessionLoadCount += 1
-		local success, result = pcall(function()
-			return self.DataStore.DataStore:UpdateAsync(self.Key, function(data)
-				-- Check if this is the first creation of this data
-				local creating = data == nil
-
-				-- Nil-safety
-				data = data or {}
-				data.MetaData = data.MetaData or {}
-
-				local _sessionId = data.MetaData.SessionJobId
-				local _sessionExpiry = data.MetaData.SessionExpiry
-				-- Make sure this isn't locked by another server
-				if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() then
-					warn(`Session for profile {self.Key} is currently locked.`)
-					return
-				end
-
-				-- Lock profile and update metadata
-				data.MetaData.SessionJobId = game.JobId
-				data.MetaData.SessionExpiry = os.time() + instance.AutoSaveInterval -- set expiry
-				self.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
-				-- If creating, also add the ProfileCreateTime
-				if creating then
-					self.MetaData.ProfileCreateTime = self.MetaData.LastUpdate
-				end
-
-				return data
-			end)
-		end)
-		if not success or not result then
-			warn(`Failed to load profile {key}: {result}`)
-			return nil
-		end
 		
 		if key then
 			-- Add to LoadedProfile and start running loops
@@ -241,6 +208,7 @@ function Profile:AddUserId(userId: number)
 	if idx then return end
 
 	table.insert(self.UserIds, userId)
+	
 end
 
 -- Removes a user id to the list of userIds in a profile
@@ -301,7 +269,7 @@ function Profile:Save(unlock: boolean?)
 				data.MetaData.SessionJobId = nil
 				data.MetaData.SessionExpiry = nil
 			else
-				data.MetaData.SessionExpiry = os.time() + self.instance.AutoSaveInterval
+				data.MetaData.SessionExpiry = os.time() + self.DataStore.AutoSaveInterval
 			end
 
 			return data

@@ -89,6 +89,7 @@ function NStore:StartSessionAsync(key: string, arguments: {
 	local success, response = pcall(function()
 		-- UpdateAsync to retrieve up-to-date data before editing
 		self.DataStore:UpdateAsync(key, function(data)
+			local creating = data == nil -- check if profile is being created for the first time
 			-- Ensure data and MetaData is atleast an empty table
 			data = data or {}
 			data.MetaData = data.MetaData or {}
@@ -100,16 +101,20 @@ function NStore:StartSessionAsync(key: string, arguments: {
 				warn(`Session for profile {self.Key} is currently locked.`)
 				return
 			end
+			
+			-- If creating, add the ProfileCreateTime
+			if creating then
+				self.MetaData.ProfileCreateTime = self.MetaData.LastUpdate
+			end
 
 			-- If there is no data, apply and return the template
 			if not data or not data.Data then
 				local template = _deepCloneTable(Profile.PROFILE_TEMPLATE)
-				template.Data = self.Template or {}
+				template.Data = _deepCloneTable(self.Template) or {}
 
 				loadedData = template
 				loadedData.MetaData.SessionJobId = JobId -- lock profile
 				loadedData.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
-				print(loadedData)
 
 				return loadedData
 			end
