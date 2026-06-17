@@ -8,7 +8,9 @@ local NStore = require(script.Parent.NStore)
 local TEMPLATE = {
 	Cash = 0,
 	Items = {},
-	Deaths = 0
+	Stats = {
+		Deaths = 0,
+	}
 }
 
 -- Create a new NStore instance
@@ -30,8 +32,8 @@ local function CharacterAdded(character: Model)
 		local profile = Profiles[player]
 		if not profile then return end
 
-		profile.Data.Deaths += 1
-		print(`{player.DisplayName} has died {profile.Data.Deaths} times!`)
+		profile.Data.Stats.Deaths += 1
+		print(`{player.DisplayName} has died {profile.Data.Stats.Deaths} times!`)
 	end)
 end
 
@@ -41,7 +43,7 @@ local function PlayerAdded(player: Player)
 	player.CharacterAdded:Connect(CharacterAdded)
 	
 	-- Initialize the profile for the player
-	local profile = PlayerStore:StartSession(`{player.UserId}`, {
+	local profile = PlayerStore:StartSessionAsync(`{player.UserId}`, {
 		Cancel = function()
 			return player.Parent ~= Players -- Cancel profile initialization if the player isn't in the game anymore
 		end,
@@ -56,6 +58,16 @@ local function PlayerAdded(player: Player)
 		profile.OnSessionEnd:Connect(function()
 			Profiles[player] = nil
 			player:Kick(`Profile session end - Please rejoin`)
+		end)
+		
+		-- Connect a changed event to the Cash value
+		profile:OnChange("Cash", function(old, new)
+			print(`{player.DisplayName} has {new} cash! Was {old} cash.`)
+		end)
+		
+		-- Connect a changed event to the Deaths value, which is in the Stats table in the profile
+		profile:OnChange("Stats.Deaths", function(old, new)
+			print(`{player.DisplayName} has died {new} times! Was {old} times.`)
 		end)
 
 		if player.Parent == Players then

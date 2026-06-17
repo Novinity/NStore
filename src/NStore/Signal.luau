@@ -12,7 +12,7 @@ export type Signal = {
 }
 
 -- Connection type for type checking
-type Connection = {
+export type Connection = {
 	Callback: () -> (),
 	Disconnect: (self: Connection) -> (),
 	Once: boolean
