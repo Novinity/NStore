@@ -3,8 +3,9 @@ local Signal = require(script.Parent.Signal)
 local Profile = {}
 Profile.__index = Profile
 
-Profile.LoadedProfiles = {}
+Profile.LoadedProfiles = {} -- List of all profiles that are currently loaded and have active sessions
 
+-- Profile object template
 Profile.PROFILE_TEMPLATE = {
 	Data = {},
 	MetaData = {
@@ -16,6 +17,7 @@ Profile.PROFILE_TEMPLATE = {
 	UserIds = {}
 }
 
+-- Profile type for type checking
 export type Profile<TData> = {
 	Key: string,
 	DataStore: any,
@@ -39,6 +41,8 @@ export type Profile<TData> = {
 	Save: (self: Profile<TData>, unlock: boolean?) -> boolean,
 }
 
+-- Clones a table and all its subtables
+-- tbl: The table to clone
 local function _deepCloneTable(tbl)
 	local clone = {}
 	for key, value in pairs(tbl) do
@@ -51,6 +55,9 @@ local function _deepCloneTable(tbl)
 	return clone
 end
 
+-- Auto save a profile at a given interval
+-- profile: The profile to save
+-- interval: The amount of time between each autosave
 local function _runAutoSaveLoop(profile, interval: number)
 	while profile ~= nil and not profile.SessionEnded do
 		task.wait(interval)
@@ -58,20 +65,26 @@ local function _runAutoSaveLoop(profile, interval: number)
 	end
 end
 
+-- Check if two tables have all the same values
+-- a, b: Tables to compare
 local function _tablesEqual(a, b)
+	-- If the same table was passed twice
 	if a == b then
 		return true
 	end
+	-- If either is not a table
 	if typeof(a) ~= "table" or typeof(b) ~= "table" then
 		return false
 	end
 
+	-- Loop through and check if every value is equal to each other
 	for key, value in pairs(a) do
 		if not _tablesEqual(value, b[key]) then
 			return false
 		end
 	end
 
+	-- Make sure no values are missing
 	for key in pairs(b) do
 		if a[key] == nil then
 			return false
@@ -81,22 +94,33 @@ local function _tablesEqual(a, b)
 	return true
 end
 
+-- Detect when changes are made to a profile's data
+-- profile: The profile to check for changes on
+-- interval: The amount of time between each check
 local function _runChangedCheck(profile, interval: number)
-	local cache = _deepCloneTable(profile.Data)
+	local cache = _deepCloneTable(profile.Data) -- Stores the last known value
 	
 	while profile ~= nil and not profile.SessionEnded do
 		task.wait(interval)
+		-- Check current value against cache
 		if not _tablesEqual(profile.Data, cache) then
+			-- If they are not equal, fire changed signal and update cache
 			profile.Changed:Fire(profile.Data)
 			cache = _deepCloneTable(profile.Data)
 		end
 	end
 end
 
+-- Ensures no values from template are missing in target
+-- target: The table to add values to
+-- template: The table to reference for value
 local function _reconcileTable(target, template)
+	-- Loop through everything in template
 	for key, templateValue in pairs(template) do
+		-- If it doesn't exist, add it
 		if target[key] == nil then
 			target[key] = templateValue
+		-- If it's a table, ensure they are reconciled too
 		elseif typeof(target[key]) == "table" and typeof(templateValue) == "table" then
 			_reconcileTable(target[key], templateValue)
 		end
@@ -104,11 +128,18 @@ local function _reconcileTable(target, template)
 	return target
 end
 
+-- Creates a new profile
+-- key: The datastore key to use
+-- data: The data to load onto the profile
+-- instance: The NStore instance this is applied to
 function Profile.new(key: string, data: {}, instance)
+	-- Nil-safety
 	data = data or {}
 	data.MetaData = data.MetaData or {}
 	
+	-- Called when session ends
 	local OnSessionEnd: Signal.Signal = Signal.new()
+	-- Called when profile data is changed
 	local Changed: Signal.Signal = Signal.new()
 	
 	local self = setmetatable({
@@ -131,19 +162,23 @@ function Profile.new(key: string, data: {}, instance)
 
 	local success, result = pcall(function()
 		return self.DataStore.DataStore:UpdateAsync(self.Key, function(data)
+			-- Check if this is the first creation of this data
 			local creating = data == nil
 			
+			-- Nil-safety
 			data = data or {}
 			data.MetaData = data.MetaData or {}
 			
+			-- Ensure profile is not already locked
 			if data.MetaData.SessionJobId ~= nil and data.MetaData.SessionJobId ~= game.JobId then
 				warn(`Session for profile {key} is currently locked.`)
 				return
 			end
 
+			-- Lock profile and update metadata
 			data.MetaData.SessionJobId = game.JobId
 			self.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
-			self.MetaData.LastUpdate += 1
+			-- If creating, also add the ProfileCreateTime
 			if creating then
 				self.MetaData.ProfileCreateTime = self.MetaData.LastUpdate
 			end
@@ -157,6 +192,7 @@ function Profile.new(key: string, data: {}, instance)
 	end
 
 	if key then
+		-- Add to LoadedProfile and start running loops
 		Profile.LoadedProfiles[key] = self
 		task.spawn(_runAutoSaveLoop, self, instance.AutoSaveInterval)
 		task.spawn(_runChangedCheck, self, 1)
@@ -165,49 +201,65 @@ function Profile.new(key: string, data: {}, instance)
 	return self
 end
 
+-- Adds a user id to the list of userIds in a profile
+-- userId: The user id to add
 function Profile:AddUserId(userId: number)
+	-- Make sure it's not already in the list
 	local idx = table.find(self.UserIds, userId)
 	if idx then return end
 	
 	table.insert(self.UserIds, userId)
 end
 
+-- Removes a user id to the list of userIds in a profile
+-- userId: The user id to remove
 function Profile:RemoveUserId(userId: number)
+	-- Make sure it's actually in the list
 	local idx = table.find(self.UserIds, userId)
 	if not idx then return end
 
 	table.remove(self.UserIds, idx)
 end
 
+-- Ensures no values from the template are missing from the data
 function Profile:Reconcile()
 	local reconciled = _reconcileTable(self.Data, self.DataStore.Template)
 	self.Data = reconciled
 end
 
+-- Ends a profile's session (saving and unlocking it)
 function Profile:EndSession()
+	-- If it's already ended, don't continue
 	if self.SessionEnded then
 		return
 	end
 	
+	-- Call session ended signal, save, and unload
 	self.SessionEnded = true
 	self.OnSessionEnd:Fire()
 	self:Save(true)
 	Profile.LoadedProfiles[self.Key] = nil
 end
 
+-- Saves a profile's data
+-- unlock: Whether to unlock the session
 function Profile:Save(unlock: boolean?)
 	local success, response = pcall(function()
 		return self.DataStore.DataStore:UpdateAsync(self.Key, function(data)
+			-- Nil-safety
 			data = data or {}
 			data.MetaData = data.MetaData or {}
 			
+			-- Make sure this isn't locked by another server
 			if data.MetaData.SessionJobId ~= nil and data.MetaData.SessionJobId ~= game.JobId then
 				warn("Session is currently locked.")
 				return
 			end
 
+			-- Update LastUpdate
 			self.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
 
+			-- Set all the data and unlock if necessary
 			data.Data = self.Data
 			data.MetaData = self.MetaData
 			data.UserIds = self.UserIds
