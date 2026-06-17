@@ -19,18 +19,14 @@ local Profiles: {[Player]: NStore.Profile<typeof(TEMPLATE)>} = {}
 -- Called when player has a character added
 local function CharacterAdded(character: Model)
 	-- Get the player
-	print("a")
 	local player = Players:GetPlayerFromCharacter(character)
 	if player == nil then return end
-	print("b")
 
 	-- Get their humanoid
 	local humanoid: Humanoid = character:WaitForChild("Humanoid")
-	print("c")
 
 	-- When they die, increment their death counter
 	humanoid.Died:Connect(function()
-		print("d")
 		local profile = Profiles[player]
 		if not profile then return end
 
