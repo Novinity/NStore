@@ -42,11 +42,12 @@ end
 function Signal:Connect(callback): Connection
 	local connection: Connection = {
 		Callback = callback,
-		Disconnect = function()
-			_disconnectConnection(self)
-		end,
 		Once = false
 	}
+	connection.Disconnect = function()
+		_disconnectConnection(self, connection)
+	end
+	
 	-- Add to connections
 	table.insert(self.Connections, connection)
 	return connection
@@ -57,11 +58,12 @@ end
 function Signal:Once(callback): Connection
 	local connection: Connection = {
 		Callback = callback,
-		Disconnect = function()
-			_disconnectConnection(self)
-		end,
 		Once = true
 	}
+	connection.Disconnect = function()
+		_disconnectConnection(self, connection)
+	end
+	
 	table.insert(self.Connections, connection)
 	return connection
 end
@@ -78,9 +80,10 @@ end
 -- Fires all connections on a signal
 -- ...: Args to pass to connections
 function Signal:Fire(...)
+	local connCache = table.clone(self.Connections)
 	-- Loop through all connections and fire their callbacks with the passed args
-	for _, connection in self.Connections do
-		connection.Callback(...)
+	for _, connection in connCache do
+		task.spawn(connection.Callback, ...)
 		-- If they wwere connected using :Once, disconnect them
 		if connection.Once then
 			connection:Disconnect()

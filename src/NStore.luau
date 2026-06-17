@@ -28,6 +28,8 @@ export type NStore<TData> = {
 	AutoSaveInterval: number,
 
 	StartSessionAsync: (self: NStore<TData>, key: string, functions: {Cancel: (() -> boolean)?}) -> Profile<TData>?,
+	GetAsync: (self: NStore<TData>, key: string) -> Profile<TData>?,
+	RemoveAsync: (self: NStore<TData>, key: string) -> (),
 }
 
 -- Clones a table and all its subtables
@@ -91,24 +93,29 @@ function NStore:StartSessionAsync(key: string, arguments: {
 			data = data or {}
 			data.MetaData = data.MetaData or {}
 
-			-- Check if profile is already locked
-			if data.MetaData.SessionJobId ~= nil and data.MetaData.SessionJobId ~= JobId and not arguments.Steal then
-				warn(`Profile {key} is already locked to another server: {data.MetaData.SessionJobId}`)
-				return nil
+			local _sessionId = data.MetaData.SessionJobId
+			local _sessionExpiry = data.MetaData.SessionExpiry
+			-- Make sure this isn't locked by another server
+			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() then
+				warn(`Session for profile {self.Key} is currently locked.`)
+				return
 			end
 
 			-- If there is no data, apply and return the template
 			if not data or not data.Data then
 				local template = _deepCloneTable(Profile.PROFILE_TEMPLATE)
-				template.Data = template.Data or {}
+				template.Data = self.Template or {}
 
 				loadedData = template
 				loadedData.MetaData.SessionJobId = JobId -- lock profile
+				loadedData.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
+				print(loadedData)
 
 				return loadedData
 			end
 
 			data.MetaData.SessionJobId = JobId -- lock profile
+			data.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
 			loadedData = data
 			return data
 		end)
@@ -130,18 +137,9 @@ function NStore:GetAsync(key: string)
 	local success, response = pcall(function()
 		-- UpdateAsync to retrieve up-to-date data before editing
 		self.DataStore:UpdateAsync(key, function(data)
-			-- Ensure data and MetaData is atleast an empty table
-			data = data or {}
-			data.MetaData = data.MetaData or {}
-
-			-- If there is no data, apply and return the template
+			-- If there is no data, return nothing
 			if not data or not data.Data then
-				local template = _deepCloneTable(Profile.PROFILE_TEMPLATE)
-				template.Data = template.Data or {}
-
-				loadedData = template
-
-				return loadedData
+				return nil
 			end
 
 			loadedData = data
@@ -160,23 +158,23 @@ end
 -- key: The key of the profile to delete
 -- steal: Whether to ignore a session lock on the profile
 function NStore:RemoveAsync(key: string, steal: boolean?)
-	local success, response = pcall(function()
-		self.DataStore:UpdateAsync(key, function(data)
-			-- Ensure data and MetaData is atleast an empty table
-			data = data or {}
-			data.MetaData = data.MetaData or {}
-
-			-- Check if profile is already locked
-			if data.MetaData.SessionJobId ~= nil and data.MetaData.SessionJobId ~= game.JobId and not steal then
-				return nil
+	local profile = self:GetAsync(key)
+	if profile then
+		if profile.MetaData then
+			local _sessionId = profile.MetaData.SessionJobId
+			local _sessionExpiry = profile.MetaData.SessionExpiry
+			-- Make sure this isn't locked by another server
+			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() then
+				warn(`Session for profile {key} is currently locked.`)
+				return
 			end
-			
-			data = nil
-			return data
+		end
+		local success, result = pcall(function()
+			return self.DataStore:RemoveAsync(key)
 		end)
-	end)
-	if not success then
-		warn(`Failed to remove profile {key}: {response}`)
+		if not success then
+			warn(`Failed to remove profile {key}: {result}`)
+		end
 	end
 end
 

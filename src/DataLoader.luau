@@ -69,6 +69,8 @@ local function PlayerAdded(player: Player)
 		profile:OnChange("Stats.Deaths", function(old, new)
 			print(`{player.DisplayName} has died {new} times! Was {old} times.`)
 		end)
+		
+		
 
 		if player.Parent == Players then
 			-- Store the profile in the dictionary

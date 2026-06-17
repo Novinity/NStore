@@ -12,7 +12,8 @@ Profile.PROFILE_TEMPLATE = {
 		LastUpdate = DateTime.now().UnixTimestampMillis,
 		ProfileCreateTime = DateTime.now().UnixTimestampMillis,
 		SessionLoadCount = 0,
-		SessionJobId = nil
+		SessionJobId = nil,
+		SessionExpiry = nil,
 	},
 	UserIds = {}
 }
@@ -29,6 +30,7 @@ export type Profile<TData> = {
 		ProfileCreateTime: number,
 		SessionLoadCount: number,
 		SessionJobId: string?,
+		SessionExpiry: number?,
 	},
 	UserIds: {number},
 
@@ -105,7 +107,7 @@ local function _runChangedCheck(profile, interval: number)
 	local cache = _deepCloneTable(profile.Data) -- Stores the last known value
 	
 	-- Go through the table and call each key's changed signal if it has one
-	local function callChangedPerValue(tbl, c, directory: string)
+	local function callChangedPerValue(tbl, c, directory: string?)
 		for key, value in pairs(tbl) do
 			if typeof(value) == "table" then
 				callChangedPerValue(value, c[key], directory and `{directory}.{key}` or key)
@@ -175,7 +177,8 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 			LastUpdate = data.MetaData.LastUpdate or DateTime.now().UnixTimestampMillis,
 			ProfileCreateTime = data.MetaData.ProfileCreateTime or DateTime.now().UnixTimestampMillis,
 			SessionLoadCount = data.MetaData.SessionLoadCount or 0,
-			SessionJobId = data.MetaData.SessionJobId or game.JobId
+			SessionJobId = data.MetaData.SessionJobId or game.JobId,
+			SessionExpiry = data.MetaData.SessionExpiry or os.time() + instance.AutoSaveInterval,
 		},
 		UserIds = data.UserIds or {},
 
@@ -194,14 +197,17 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 				data = data or {}
 				data.MetaData = data.MetaData or {}
 
-				-- Ensure profile is not already locked
-				if data.MetaData.SessionJobId ~= nil and data.MetaData.SessionJobId ~= game.JobId then
-					warn(`Session for profile {key} is currently locked.`)
+				local _sessionId = data.MetaData.SessionJobId
+				local _sessionExpiry = data.MetaData.SessionExpiry
+				-- Make sure this isn't locked by another server
+				if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() then
+					warn(`Session for profile {self.Key} is currently locked.`)
 					return
 				end
 
 				-- Lock profile and update metadata
 				data.MetaData.SessionJobId = game.JobId
+				data.MetaData.SessionExpiry = os.time() + instance.AutoSaveInterval -- set expiry
 				self.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
 				-- If creating, also add the ProfileCreateTime
 				if creating then
@@ -276,9 +282,11 @@ function Profile:Save(unlock: boolean?)
 			data = data or {}
 			data.MetaData = data.MetaData or {}
 
+			local _sessionId = data.MetaData.SessionJobId
+			local _sessionExpiry = data.MetaData.SessionExpiry
 			-- Make sure this isn't locked by another server
-			if data.MetaData.SessionJobId ~= nil and data.MetaData.SessionJobId ~= game.JobId then
-				warn("Session is currently locked.")
+			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() then
+				warn(`Session for profile {self.Key} is currently locked.`)
 				return
 			end
 
@@ -291,6 +299,9 @@ function Profile:Save(unlock: boolean?)
 			data.UserIds = self.UserIds
 			if unlock then
 				data.MetaData.SessionJobId = nil
+				data.MetaData.SessionExpiry = nil
+			else
+				data.MetaData.SessionExpiry = os.time() + self.instance.AutoSaveInterval
 			end
 
 			return data
