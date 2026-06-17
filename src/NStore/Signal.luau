@@ -80,9 +80,8 @@ end
 -- Fires all connections on a signal
 -- ...: Args to pass to connections
 function Signal:Fire(...)
-	local connCache = table.clone(self.Connections)
 	-- Loop through all connections and fire their callbacks with the passed args
-	for _, connection in connCache do
+	for _, connection in self.Connections do
 		task.spawn(connection.Callback, ...)
 		-- If they wwere connected using :Once, disconnect them
 		if connection.Once then
