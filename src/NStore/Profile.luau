@@ -1,4 +1,5 @@
 local Signal = require(script.Parent.Signal)
+local Utils = require(script.Parent.Utils)
 
 local Profile = {}
 Profile.__index = Profile
@@ -9,8 +10,8 @@ Profile.LoadedProfiles = {} -- List of all profiles that are currently loaded an
 Profile.PROFILE_TEMPLATE = {
 	Data = {},
 	MetaData = {
-		LastUpdate = DateTime.now().UnixTimestampMillis,
-		ProfileCreateTime = DateTime.now().UnixTimestampMillis,
+		LastUpdate = 0,
+		ProfileCreateTime = 0,
 		SessionLoadCount = 0,
 		SessionJobId = nil,
 		SessionExpiry = nil,
@@ -46,20 +47,6 @@ export type Profile<TData> = {
 	OnChange: (self: Profile<TData>, key: string, callback: (any, any) -> (), once: boolean?) -> Signal.Connection
 }
 
--- Clones a table and all its subtables
--- tbl: The table to clone
-local function _deepCloneTable(tbl)
-	local clone = {}
-	for key, value in pairs(tbl) do
-		if typeof(value) == "table" then
-			clone[key] = _deepCloneTable(value)
-		else
-			clone[key] = value
-		end
-	end
-	return clone
-end
-
 -- Auto save a profile at a given interval
 -- profile: The profile to save
 -- interval: The amount of time between each autosave
@@ -70,52 +57,36 @@ local function _runAutoSaveLoop(profile, interval: number)
 	end
 end
 
--- Check if two tables have all the same values
--- a, b: Tables to compare
-local function _tablesEqual(a, b)
-	-- If the same table was passed twice
-	if a == b then
-		return true
-	end
-	-- If either is not a table
-	if typeof(a) ~= "table" or typeof(b) ~= "table" then
-		return false
-	end
-
-	-- Loop through and check if every value is equal to each other
-	for key, value in pairs(a) do
-		if not _tablesEqual(value, b[key]) then
-			return false
-		end
-	end
-
-	-- Make sure no values are missing
-	for key in pairs(b) do
-		if a[key] == nil then
-			return false
-		end
-	end
-
-	return true
-end
-
 -- Detect when changes are made to a profile's data
 -- profile: The profile to check for changes on
 -- interval: The amount of time between each check
 -- TODO: optimize this...perchance...
 local function _runChangedCheck(profile, interval: number)
-	local cache = _deepCloneTable(profile.Data) -- Stores the last known value
+	local cache = Utils.deepCloneTable(profile.Data) -- Stores the last known value
 	
 	-- Go through the table and call each key's changed signal if it has one
-	local function callChangedPerValue(tbl, c, directory: string?)
-		for key, value in pairs(tbl) do
-			if typeof(value) == "table" and typeof(c[key]) == "table" then
-				callChangedPerValue(value, c[key], directory and `{directory}.{key}` or key)
-			elseif c[key] ~= value then
+	local function callChangedPerValue(new, old, profile, directory: string?)
+		for key, newValue in pairs(new) do
+			local oldValue = old[key]
+			local path = directory and `{directory}.{key}` or key
+			
+			if typeof(newValue) == "table" and typeof(oldValue) == "table" then
+				callChangedPerValue(newValue, oldValue, profile, path)
+			elseif oldValue ~= newValue then
 				-- Get and call signal
-				local signal: Signal.Signal? = directory and profile.KeySignals[`{directory}.{key}`] or profile.KeySignals[key]
+				local signal: Signal.Signal? = profile.KeySignals[path]
 				if signal then
-					signal:Fire(c[key], value)
+					signal:Fire(oldValue, newValue)
+				end
+			end
+		end
+		
+		for key, oldValue in pairs(old) do
+			if new[key] == nil then
+				local path = directory and `{directory}.{key}` or key
+				local signal: Signal.Signal? = profile.KeySignals[path]
+				if signal then
+					signal:Fire(oldValue, nil)
 				end
 			end
 		end
@@ -124,12 +95,12 @@ local function _runChangedCheck(profile, interval: number)
 	while profile ~= nil and not profile.SessionEnded do
 		task.wait(interval)
 		-- Check current value against cache
-		if not _tablesEqual(profile.Data, cache) then
+		if not Utils.tablesEqual(profile.Data, cache) then
 			-- If they are not equal, fire changed signals and update cache
 			profile.Changed:Fire(cache, profile.Data)
-			callChangedPerValue(profile.Data, cache)
+			callChangedPerValue(profile.Data, cache, profile)
 			
-			cache = _deepCloneTable(profile.Data)
+			cache = Utils.deepCloneTable(profile.Data)
 		end
 	end
 end
@@ -172,7 +143,7 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 		DataStore = instance,
 		KeySignals = {},
 		
-		Data = data.Data or Profile.PROFILE_TEMPLATE,
+		Data = data.Data or Utils.deepCloneTable(Profile.PROFILE_TEMPLATE),
 		MetaData = {
 			LastUpdate = data.MetaData.LastUpdate or DateTime.now().UnixTimestampMillis,
 			ProfileCreateTime = data.MetaData.ProfileCreateTime or DateTime.now().UnixTimestampMillis,
@@ -287,7 +258,6 @@ end
 -- callback: The function to call when the key changes (old, new)
 -- once: Whether to only use this connection once
 function Profile:OnChange(key: string, callback, once: boolean?): Signal.Connection
-	print(key)
 	-- Retrieve or create signal
 	local signal = self.KeySignals[key] or Signal.new()
 	-- If signal did not exist, cache it

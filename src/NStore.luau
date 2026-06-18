@@ -14,6 +14,7 @@ local DataStoreService = game:GetService("DataStoreService")
 
 local Profile = require(script.Profile)
 local Signal = require(script.Signal)
+local Utils = require(script.Utils)
 
 -- Profile type for type checking
 export type Profile<T> = Profile.Profile<T>
@@ -27,23 +28,10 @@ export type NStore<TData> = {
 	Template: TData,
 	AutoSaveInterval: number,
 
-	StartSessionAsync: (self: NStore<TData>, key: string, functions: {Cancel: (() -> boolean)?}) -> Profile<TData>?,
+	StartSessionAsync: (self: NStore<TData>, key: string, arguments: {Cancel: (() -> boolean)?}) -> Profile<TData>?,
 	GetAsync: (self: NStore<TData>, key: string) -> Profile<TData>?,
 	RemoveAsync: (self: NStore<TData>, key: string) -> (),
 }
-
--- Clones a table and all its subtables
-local function _deepCloneTable(tbl)
-	local clone = {}
-	for key, value in pairs(tbl) do
-		if typeof(value) == "table" then
-			clone[key] = _deepCloneTable(value)
-		else
-			clone[key] = value
-		end
-	end
-	return clone
-end
 
 -- Creates a new NStore instance
 -- name: Datastore name
@@ -97,37 +85,35 @@ function NStore:StartSessionAsync(key: string, arguments: {
 			local _sessionId = data.MetaData.SessionJobId
 			local _sessionExpiry = data.MetaData.SessionExpiry
 			-- Make sure this isn't locked by another server
-			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() then
-				warn(`Session for profile {self.Key} is currently locked.`)
+			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() and not arguments.Steal then
+				warn(`Session for profile {key} is currently locked.`)
 				return
 			end
 			
-			-- If creating, add the ProfileCreateTime
-			if creating then
-				self.MetaData.ProfileCreateTime = self.MetaData.LastUpdate
-			end
-
 			-- If there is no data, apply and return the template
 			if not data or not data.Data then
-				local template = _deepCloneTable(Profile.PROFILE_TEMPLATE)
-				template.Data = _deepCloneTable(self.Template) or {}
+				local template = Utils.deepCloneTable(Profile.PROFILE_TEMPLATE)
+				template.Data = Utils.deepCloneTable(self.Template) or {}
 
 				loadedData = template
 				loadedData.MetaData.SessionJobId = JobId -- lock profile
 				loadedData.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
+				loadedData.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
+				loadedData.MetaData.ProfileCreateTime = loadedData.MetaData.LastUpdate
 
 				return loadedData
 			end
 
 			data.MetaData.SessionJobId = JobId -- lock profile
 			data.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
+			data.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
+			
 			loadedData = data
 			return data
 		end)
 	end)
 	if success and loadedData then
-		-- Add to loaded profiles and create a profile object
-		Profile.LoadedProfiles[key] = loadedData
+		-- Create a profile object
 		return Profile.new(key, loadedData, self)
 	elseif not success then
 		warn(`Failed to start session for key {key}: {response}`)
@@ -152,11 +138,12 @@ function NStore:GetAsync(key: string)
 		end)
 	end)
 	
-	if success then
+	if success and loadedData then
 		local profile = Profile.new(key, loadedData, self, true)
-		return loadedData
+		return profile
 	end
 	warn(`Failed to get profile {key}: {response}`)
+	return nil
 end
 
 -- Deletes a profile with the given key
@@ -169,7 +156,7 @@ function NStore:RemoveAsync(key: string, steal: boolean?)
 			local _sessionId = profile.MetaData.SessionJobId
 			local _sessionExpiry = profile.MetaData.SessionExpiry
 			-- Make sure this isn't locked by another server
-			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() then
+			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() and not steal then
 				warn(`Session for profile {key} is currently locked.`)
 				return
 			end

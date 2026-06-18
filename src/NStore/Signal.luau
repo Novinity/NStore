@@ -71,19 +71,24 @@ end
 -- Waits for a signal to be fired
 function Signal:Wait()
 	local called = false
-	self:Once(function()
+	local res
+	self:Once(function(...)
 		called = true
+		res = ...
 	end)
 	repeat task.wait() until called
+	return res
 end
 
 -- Fires all connections on a signal
 -- ...: Args to pass to connections
 function Signal:Fire(...)
+	-- Cache connections to avoid modifying the table during iteration
+	local connCache = table.clone(self.Connections)
 	-- Loop through all connections and fire their callbacks with the passed args
-	for _, connection in self.Connections do
+	for _, connection in connCache do
 		task.spawn(connection.Callback, ...)
-		-- If they wwere connected using :Once, disconnect them
+		-- If they were connected using :Once, disconnect them
 		if connection.Once then
 			connection:Disconnect()
 		end
