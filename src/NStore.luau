@@ -7,13 +7,17 @@
 	- Code autocompletion
 	- Data autosaving
 	- Session locking
+	- Session expiry
 	- Data reconciliation
+	- Per-key changed signals
+
+	-- Planned features:
+	- Auto replication
 ]]
 
 local DataStoreService = game:GetService("DataStoreService")
 
 local Profile = require(script.Profile)
-local Signal = require(script.Signal)
 local Utils = require(script.Utils)
 
 -- Profile type for type checking
@@ -77,7 +81,6 @@ function NStore:StartSessionAsync(key: string, arguments: {
 	local success, response = pcall(function()
 		-- UpdateAsync to retrieve up-to-date data before editing
 		self.DataStore:UpdateAsync(key, function(data)
-			local creating = data == nil -- check if profile is being created for the first time
 			-- Ensure data and MetaData is atleast an empty table
 			data = data or {}
 			data.MetaData = data.MetaData or {}
