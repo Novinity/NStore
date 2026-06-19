@@ -25,7 +25,7 @@ local function CharacterAdded(character: Model)
 	if player == nil then return end
 
 	-- Get their humanoid
-	local humanoid: Humanoid = character:WaitForChild("Humanoid")
+	local humanoid = character:WaitForChild("Humanoid") :: Humanoid
 
 	-- When they die, increment their death counter
 	humanoid.Died:Connect(function()
@@ -43,7 +43,7 @@ local function PlayerAdded(player: Player)
 	player.CharacterAdded:Connect(CharacterAdded)
 	
 	-- Initialize the profile for the player
-	local profile = PlayerStore:StartSessionAsync(`{player.UserId}`, {
+	local profile = PlayerStore:StartSession(`{player.UserId}`, {
 		Cancel = function()
 			return player.Parent ~= Players -- Cancel profile initialization if the player isn't in the game anymore
 		end,
@@ -54,10 +54,10 @@ local function PlayerAdded(player: Player)
 		profile:AddUserId(player.UserId)
 		profile:Reconcile()
 
-		-- When the session ends, remove their profile and kick the player
-		profile.OnSessionEnd:Connect(function()
+		-- When the profile is released, remove their profile and kick the player
+		profile.OnRelease:Connect(function()
 			Profiles[player] = nil
-			player:Kick(`Profile session end - Please rejoin`)
+			player:Kick(`Profile released - Please rejoin`)
 		end)
 		
 		profile.Changed:Connect(function(old, new)
@@ -82,8 +82,8 @@ local function PlayerAdded(player: Player)
 			-- test data change
 			profile.Data.Cash += 100
 		else
-			-- If they left already, end the session
-			profile:EndSession()
+			-- If they left already, release the profile
+			profile:Release()
 		end
 	else
 		player:Kick(`Profile load fail - Please rejoin`)
@@ -95,8 +95,8 @@ local function PlayerRemoving(player: Player)
 	-- Get their profile and deinitialize it
 	local profile = Profiles[player]
 	if profile ~= nil then
-		print(`Ending session for {player.Name} ({player.UserId})`)
-		profile:EndSession()
+		print(`Releasing profile for {player.Name} ({player.UserId})`)
+		profile:Release()
 		Profiles[player] = nil
 	end
 end

@@ -7,17 +7,14 @@
 	- Code autocompletion
 	- Data autosaving
 	- Session locking
-	- Session expiry
 	- Data reconciliation
-	- Per-key changed signals
-
-	-- Planned features:
-	- Auto replication
+	- Per-key changed events
 ]]
 
 local DataStoreService = game:GetService("DataStoreService")
 
 local Profile = require(script.Profile)
+local Signal = require(script.Signal)
 local Utils = require(script.Utils)
 
 -- Profile type for type checking
@@ -31,8 +28,11 @@ export type NStore<TData> = {
 	DataStore: DataStore,
 	Template: TData,
 	AutoSaveInterval: number,
+	AutoReplicate: {},
+	
+	IsClosing: boolean,
 
-	StartSessionAsync: (self: NStore<TData>, key: string, arguments: {Cancel: (() -> boolean)?}) -> Profile<TData>?,
+	StartSession: (self: NStore<TData>, key: string, arguments: {Cancel: (() -> boolean)?}) -> Profile<TData>?,
 	GetAsync: (self: NStore<TData>, key: string) -> Profile<TData>?,
 	RemoveAsync: (self: NStore<TData>, key: string) -> (),
 }
@@ -51,6 +51,12 @@ function NStore.new(name: string, template: {}, autoSaveInterval: number?)
 	self.DataStore = DS
 	self.Template = template
 	self.AutoSaveInterval = autoSaveInterval or 300
+	
+	self.IsClosing = false
+	
+	game:BindToClose(function()
+		self.IsClosing = true
+	end)
 
 	print(`New NStore instance initialized: {name}`)
 
@@ -60,7 +66,7 @@ end
 -- Create a new profile from the given key
 -- key: The Datastore key to retrieve data from
 -- arguments: Variables and functions used to decide on certain events
-function NStore:StartSessionAsync(key: string, arguments: {
+function NStore:StartSession(key: string, arguments: {
 		Steal: boolean?, -- If true, this will override an existing session lock
 		Cancel: () -> ()? -- If true is returned by this function, cancel session starting
 	})
@@ -78,48 +84,64 @@ function NStore:StartSessionAsync(key: string, arguments: {
 
 	local loadedData
 	local JobId = game.JobId -- server id
-	local success, response = pcall(function()
-		-- UpdateAsync to retrieve up-to-date data before editing
-		self.DataStore:UpdateAsync(key, function(data)
-			-- Ensure data and MetaData is atleast an empty table
-			data = data or {}
-			data.MetaData = data.MetaData or {}
+	local attempt = 0
+	
+	local suc = false -- successful
+	local res -- response
+	repeat
+		attempt += 1
+	
+		local success, response = pcall(function()
+			-- UpdateAsync to retrieve up-to-date data before editing
+			self.DataStore:UpdateAsync(key, function(data)
+				local creating = data == nil -- check if profile is being created for the first time
+				-- Ensure data and MetaData is atleast an empty table
+				data = data or {}
+				data.MetaData = data.MetaData or {}
 
-			local _sessionId = data.MetaData.SessionJobId
-			local _sessionExpiry = data.MetaData.SessionExpiry
-			-- Make sure this isn't locked by another server
-			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() and not arguments.Steal then
-				warn(`Session for profile {key} is currently locked.`)
-				return
-			end
-			
-			-- If there is no data, apply and return the template
-			if not data or not data.Data then
-				local template = Utils.deepCloneTable(Profile.PROFILE_TEMPLATE)
-				template.Data = Utils.deepCloneTable(self.Template) or {}
+				local _sessionId = data.MetaData.SessionJobId
+				local _sessionExpiry = data.MetaData.SessionExpiry
+				-- Make sure this isn't locked by another server
+				if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() and not arguments.Steal then
+					warn(`Session for profile {key} is currently locked.`)
+					return
+				end
+				
+				-- If there is no data, apply and return the template
+				if not data or not data.Data then
+					local template = Utils.deepCloneTable(Profile.PROFILE_TEMPLATE)
+					template.Data = Utils.deepCloneTable(self.Template) or {}
 
-				loadedData = template
-				loadedData.MetaData.SessionJobId = JobId -- lock profile
-				loadedData.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
-				loadedData.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
-				loadedData.MetaData.ProfileCreateTime = loadedData.MetaData.LastUpdate
+					loadedData = template
+					loadedData.MetaData.SessionJobId = JobId -- lock profile
+					loadedData.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
+					loadedData.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
+					loadedData.MetaData.ProfileCreateTime = loadedData.MetaData.LastUpdate
 
-				return loadedData
-			end
+					return loadedData
+				end
 
-			data.MetaData.SessionJobId = JobId -- lock profile
-			data.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
-			data.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
-			
-			loadedData = data
-			return data
+				data.MetaData.SessionJobId = JobId -- lock profile
+				data.MetaData.SessionExpiry = os.time() + self.AutoSaveInterval -- set expiry
+				data.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
+				
+				loadedData = data
+				return data
+			end)
 		end)
-	end)
-	if success and loadedData then
+		
+		res = response
+		suc = success
+		
+		if not success and not response then
+			task.wait(2 ^ attempt)
+		end
+	until (suc and loadedData) or attempt >= 5 -- retry until success or max attempts reached
+	if suc and loadedData then
 		-- Create a profile object
 		return Profile.new(key, loadedData, self)
-	elseif not success then
-		warn(`Failed to start session for key {key}: {response}`)
+	elseif not suc then
+		warn(`Failed to start session for key {key}: {res}`)
 	end
 	return nil
 end
@@ -144,32 +166,52 @@ function NStore:GetAsync(key: string)
 	if success and loadedData then
 		local profile = Profile.new(key, loadedData, self, true)
 		return profile
+	elseif not success then
+		warn(`Failed to get profile {key}: {response}`)
 	end
-	warn(`Failed to get profile {key}: {response}`)
 	return nil
+end
+
+-- Check if a profile is locked
+-- key: The key of the profile to check
+function NStore:IsLocked(key: string)
+	local loadedData
+	local success, response = pcall(function()
+		-- UpdateAsync to retrieve up-to-date data before editing
+		self.DataStore:UpdateAsync(key, function(data)
+			-- If there is no data, return nothing
+			if not data or not data.Data or not data.MetaData then
+				return nil
+			end
+
+			loadedData = data
+			return loadedData
+		end)
+	end)
+	
+	if success and loadedData then
+		local _sessionId = loadedData.MetaData.SessionJobId
+		local _sessionExpiry = loadedData.MetaData.SessionExpiry
+		return _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time()
+	end
+	return false
 end
 
 -- Deletes a profile with the given key
 -- key: The key of the profile to delete
 -- steal: Whether to ignore a session lock on the profile
 function NStore:RemoveAsync(key: string, steal: boolean?)
-	local profile = self:GetAsync(key)
-	if profile then
-		if profile.MetaData then
-			local _sessionId = profile.MetaData.SessionJobId
-			local _sessionExpiry = profile.MetaData.SessionExpiry
-			-- Make sure this isn't locked by another server
-			if _sessionId ~= nil and _sessionId ~= game.JobId and (_sessionExpiry or 0) >= os.time() and not steal then
-				warn(`Session for profile {key} is currently locked.`)
-				return
-			end
-		end
+	local isLocked = self:IsLocked(key)
+	if not isLocked then
 		local success, result = pcall(function()
 			return self.DataStore:RemoveAsync(key)
 		end)
 		if not success then
 			warn(`Failed to remove profile {key}: {result}`)
 		end
+	else
+		warn(`Session for profile {key} is currently locked.`)
+		return
 	end
 end
 

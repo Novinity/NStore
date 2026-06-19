@@ -34,25 +34,33 @@ export type Profile<TData> = {
 		SessionExpiry: number?,
 	},
 	UserIds: {number},
+	
+	Released: boolean?,
 
-	Changed: any,
-	OnSessionEnd: any,
-	SessionEnded: boolean?,
+	Changed: Signal.Signal,
+	OnRelease: Signal.Signal,
+	OnSave: Signal.Signal,
+	OnAfterSave: Signal.Signal,
+	OnLastSave: Signal.Signal,
 
 	AddUserId: (self: Profile<TData>, userId: number) -> (),
 	RemoveUserId: (self: Profile<TData>, userId: number) -> (),
 	Reconcile: (self: Profile<TData>) -> (),
-	EndSession: (self: Profile<TData>) -> (),
+	Release: (self: Profile<TData>) -> (),
 	Save: (self: Profile<TData>, unlock: boolean?) -> boolean,
-	OnChange: (self: Profile<TData>, key: string, callback: (any, any) -> (), once: boolean?) -> Signal.Connection
+	OnChange: (self: Profile<TData>, key: string, callback: (any, any) -> (), once: boolean?) -> Signal.Connection,
+	DisconnectAllKeyListeners: (self: Profile<TData>, key: string) -> ()
 }
 
 -- Auto save a profile at a given interval
 -- profile: The profile to save
 -- interval: The amount of time between each autosave
 local function _runAutoSaveLoop(profile, interval: number)
-	while profile ~= nil and not profile.SessionEnded do
+	while profile ~= nil and not profile.Released do
 		task.wait(interval)
+		if profile.Released then
+			break
+		end
 		profile:Save()
 	end
 end
@@ -105,7 +113,6 @@ local function _proxyTable(target, path, onChange)
 		-- setter
 		__newindex = function(_, key, value)
 			-- Check if a change was actually made
-			local fullPath: string = path .. key
 			local old = target[key]
 			if old == value then return end
 			
@@ -139,6 +146,17 @@ local function _proxyTable(target, path, onChange)
 	}), target
 end
 
+local function _dataChangeCallback(self, subKey, old, new, path)
+	-- Fire the profile change and key change events
+	self.Changed:Fire(old, new)
+
+	local p = path .. subKey
+	local signal: Signal.Signal? = self.KeySignals[p]
+	if signal then
+		signal:Fire(old, new)
+	end
+end
+
 -- Creates a new profile
 -- key: The datastore key to use
 -- data: The data to load onto the profile
@@ -150,10 +168,20 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 	data.MetaData = data.MetaData or {}
 
 	-- Called when session ends
-	local OnSessionEnd: Signal.Signal = Signal.new()
+	local OnRelease: Signal.Signal = Signal.new()
 	-- Called when profile data is changed
 	-- Calls with old and new values
 	local Changed: Signal.Signal = Signal.new()
+	-- Called right before the profile saves
+	local OnSave: Signal.Signal = Signal.new()
+	-- Called right after the profile saves
+	-- Passes success status with it
+	local OnAfterSave: Signal.Signal = Signal.new()
+	-- Called when the profile is saving for the final time
+	-- Passes the reason for ending
+	-- "Manual": :Release was called by user code
+	-- "Shutdown": :Release was called because the server is shutting down
+	local OnLastSave: Signal.Signal = Signal.new()
 
 	local self = setmetatable({
 		Key = key,
@@ -171,21 +199,17 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 		UserIds = data.UserIds or {},
 
 		Changed = Changed,
-		OnSessionEnd = OnSessionEnd
+		OnRelease = OnRelease,
+		OnSave = OnSave,
+		OnAfterSave = OnAfterSave,
+		OnLastSave = OnLastSave
 	}, Profile)
 	
 	-- Create a proxy for the data
 	-- Raw data keeps a copy of the data without any proxy for saving
 	local rawData = data.Data
 	local proxy, raw = _proxyTable(rawData, nil, function(subKey, old, new, path)
-		-- Fire the profile change and key change events
-		self.Changed:Fire(old, new)
-		
-		local p = path .. subKey
-		local signal: Signal.Signal? = self.KeySignals[p]
-		if signal then
-			signal:Fire(old, new)
-		end
+		_dataChangeCallback(self, subKey, old, new, path)
 	end)
 	
 	self.Data = proxy
@@ -228,26 +252,51 @@ end
 
 -- Ensures no values from the template are missing from the data
 function Profile:Reconcile()
-	_reconcileTable(self._rawData, self.DataStore.Template)
+	local reconciled = _reconcileTable(self._rawData, self.DataStore.Template)
+	local proxy, raw = _proxyTable(reconciled, nil, function(subKey, old, new, path)
+		_dataChangeCallback(self, subKey, old, new, path)
+	end)
+	self.Data = proxy
+	self._rawData = raw
 end
 
 -- Ends a profile's session (saving and unlocking it)
-function Profile:EndSession()
+function Profile:Release()
 	-- If it's already ended, don't continue
-	if self.SessionEnded then
+	if self.Released then
 		return
 	end
 
 	-- Call session ended signal, save, and unload
-	self.SessionEnded = true
-	self.OnSessionEnd:Fire()
+	self.Released = true
+	self.OnRelease:Fire()
+	
+	if self.DataStore.IsClosing then
+		self.OnLastSave:Fire("Shutdown")
+	else
+		self.OnLastSave:Fire("Manual")
+	end
+	
 	self:Save(true)
 	Profile.LoadedProfiles[self.Key] = nil
+	
+	-- Clean up connections
+	for _, signal: Signal.Signal in self.KeySignals do
+		signal:DisconnectAll()
+	end
+	self.OnRelease:DisconnectAll()
+	self.OnSave:DisconnectAll()
+	self.OnAfterSave:DisconnectAll()
+	self.OnLastSave:DisconnectAll()
+	self.Changed:DisconnectAll()
 end
 
 -- Saves a profile's data
 -- unlock: Whether to unlock the session
-function Profile:Save(unlock: boolean?)
+function Profile:Save(unlock: boolean?, dontFire: boolean?)
+	if not dontFire then
+		self.OnSave:Fire()
+	end
 	local success, response = pcall(function()
 		return self.DataStore.DataStore:UpdateAsync(self.Key, function(data)
 			-- Nil-safety
@@ -279,6 +328,11 @@ function Profile:Save(unlock: boolean?)
 			return data
 		end)
 	end)
+	
+	if not dontFire then
+		self.OnAfterSave:Fire(success and response and true or false)
+	end
+	
 	if not success or not response then
 		warn(`Failed to save profile {self.Key}: {response}`)
 		return false
@@ -303,6 +357,15 @@ function Profile:OnChange(key: string, callback, once: boolean?): Signal.Connect
 		return signal:Once(callback)
 	else
 		return signal:Connect(callback)
+	end
+end
+
+-- Disconnects all changed signals for the given key
+-- key: The key to disconnect from
+function Profile:DisconnectAllKeyListeners(key: string)
+	local signal = self.KeySignals[key]
+	if signal then
+		signal:DisconnectAll()
 	end
 end
 
