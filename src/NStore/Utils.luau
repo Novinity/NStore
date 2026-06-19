@@ -43,4 +43,32 @@ function Utils.tablesEqual(a, b)
 	return true
 end
 
+-- Converts a table to a string
+-- tbl: The table to convert
+-- indent: How much to indent the string by
+function Utils.tableToString(tbl, indent)
+	indent = indent or 0
+	local prefix = string.rep("  ", indent)
+	local lines = {}
+
+	for key, value in pairs(tbl) do
+		local keyStr = typeof(key) == "string" and key or `[{tostring(key)}]`
+		local valueStr
+
+		if typeof(value) == "table" then
+			local inner = Utils.tableToString(value, indent + 1)
+			valueStr = inner == "{}" and "{}" or `\n{inner}\n{prefix}`
+		elseif typeof(value) == "string" then
+			valueStr = `"{value}"`
+		else
+			valueStr = tostring(value)
+		end
+
+		table.insert(lines, `{prefix}  {keyStr} = {valueStr}`)
+	end
+
+	if #lines == 0 then return "{}" end
+	return table.concat(lines, ",\n")
+end
+
 return Utils

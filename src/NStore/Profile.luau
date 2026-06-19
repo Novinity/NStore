@@ -1,3 +1,5 @@
+local HttpService = game:GetService("HttpService")
+
 local Signal = require(script.Parent.Signal)
 local Utils = require(script.Parent.Utils)
 
@@ -57,54 +59,6 @@ local function _runAutoSaveLoop(profile, interval: number)
 	end
 end
 
--- Detect when changes are made to a profile's data
--- profile: The profile to check for changes on
--- interval: The amount of time between each check
--- TODO: optimize this...perchance...
-local function _runChangedCheck(profile, interval: number)
-	local cache = Utils.deepCloneTable(profile.Data) -- Stores the last known value
-	
-	-- Go through the table and call each key's changed signal if it has one
-	local function callChangedPerValue(new, old, profile, directory: string?)
-		for key, newValue in pairs(new) do
-			local oldValue = old[key]
-			local path = directory and `{directory}.{key}` or key
-			
-			if typeof(newValue) == "table" and typeof(oldValue) == "table" then
-				callChangedPerValue(newValue, oldValue, profile, path)
-			elseif oldValue ~= newValue then
-				-- Get and call signal
-				local signal: Signal.Signal? = profile.KeySignals[path]
-				if signal then
-					signal:Fire(oldValue, newValue)
-				end
-			end
-		end
-		
-		for key, oldValue in pairs(old) do
-			if new[key] == nil then
-				local path = directory and `{directory}.{key}` or key
-				local signal: Signal.Signal? = profile.KeySignals[path]
-				if signal then
-					signal:Fire(oldValue, nil)
-				end
-			end
-		end
-	end
-
-	while profile ~= nil and not profile.SessionEnded do
-		task.wait(interval)
-		-- Check current value against cache
-		if not Utils.tablesEqual(profile.Data, cache) then
-			-- If they are not equal, fire changed signals and update cache
-			profile.Changed:Fire(cache, profile.Data)
-			callChangedPerValue(profile.Data, cache, profile)
-			
-			cache = Utils.deepCloneTable(profile.Data)
-		end
-	end
-end
-
 -- Ensures no values from template are missing in target
 -- target: The table to add values to
 -- template: The table to reference for value
@@ -120,6 +74,71 @@ local function _reconcileTable(target, template)
 		end
 	end
 	return target
+end
+
+-- Creates a proxy/interceptor for the given table to allow changes to be detected
+-- target: The table to create a proxy for
+-- path: The path to the table to pass to changed event
+-- onChange: Function to call when a change is detected
+local function _proxyTable(target, path, onChange)
+	path = path or "" -- path to current location in table
+	local childProxies = {} -- proxy cache
+	
+	return setmetatable({}, {
+		-- getter
+		__index = function(_, key)
+			local value = target[key]
+			-- Proxy nested tables
+			if typeof(value) == "table" then
+				-- Check cache for existing proxy, create if one doesnt exist
+				if not childProxies[key] then
+					local prxy = _proxyTable(value, path .. key .. ".", function(subKey, old, new, path)
+						if onChange then
+							onChange(subKey, old, new, path)
+						end
+					end)
+					childProxies[key] = prxy
+					return prxy
+				end
+				return childProxies[key]
+			end
+			return value
+		end,
+		-- setter
+		__newindex = function(_, key, value)
+			-- Check if a change was actually made
+			local fullPath: string = path .. key
+			local old = target[key]
+			if old == value then return end
+			
+			-- Update value in proxy table
+			target[key] = value
+			-- Invalidate existing proxy cache for this key
+			childProxies[key] = nil
+			
+			-- Call changed
+			if onChange then
+				onChange(key, old, value, path)
+			end
+		end,
+		-- length
+		__len = function()
+			return #target
+		end,
+		-- iteration
+		__iter = function(self)
+			local key = nil
+			return function()
+				key = next(target, key)
+				if not key then return nil end
+				return key, self[key]
+			end, self
+		end,
+		-- print
+		__tostring = function()
+			return `\{\n{Utils.tableToString(target, 6)}\n\}`
+		end,
+	}), target
 end
 
 -- Creates a new profile
@@ -143,7 +162,7 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 		DataStore = instance,
 		KeySignals = {},
 		
-		Data = data.Data or Utils.deepCloneTable(Profile.PROFILE_TEMPLATE),
+		--Data = {},
 		MetaData = {
 			LastUpdate = data.MetaData.LastUpdate or DateTime.now().UnixTimestampMillis,
 			ProfileCreateTime = data.MetaData.ProfileCreateTime or DateTime.now().UnixTimestampMillis,
@@ -156,6 +175,23 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 		Changed = Changed,
 		OnSessionEnd = OnSessionEnd
 	}, Profile)
+	
+	-- Create a proxy for the data
+	-- Raw data keeps a copy of the data without any proxy for saving
+	local rawData = data.Data
+	local proxy, raw = _proxyTable(rawData, nil, function(subKey, old, new, path)
+		-- Fire the profile change and key change events
+		self.Changed:Fire(old, new)
+		
+		local p = path .. subKey
+		local signal: Signal.Signal? = self.KeySignals[p]
+		if signal then
+			signal:Fire(old, new)
+		end
+	end)
+	
+	self.Data = proxy
+	self._rawData = raw
 
 	if not mock then
 		self.MetaData.SessionLoadCount += 1
@@ -164,7 +200,7 @@ function Profile.new(key: string, data: {}, instance, mock: boolean?)
 			-- Add to LoadedProfile and start running loops
 			Profile.LoadedProfiles[key] = self
 			task.spawn(_runAutoSaveLoop, self, instance.AutoSaveInterval)
-			task.spawn(_runChangedCheck, self, 0.5)
+			--task.spawn(_runChangedCheck, self, 0.5)
 		end
 	end
 
@@ -194,8 +230,7 @@ end
 
 -- Ensures no values from the template are missing from the data
 function Profile:Reconcile()
-	local reconciled = _reconcileTable(self.Data, self.DataStore.Template)
-	self.Data = reconciled
+	_reconcileTable(self._rawData, self.DataStore.Template)
 end
 
 -- Ends a profile's session (saving and unlocking it)
@@ -233,7 +268,7 @@ function Profile:Save(unlock: boolean?)
 			self.MetaData.LastUpdate = DateTime.now().UnixTimestampMillis
 
 			-- Set all the data and unlock if necessary
-			data.Data = self.Data
+			data.Data = Utils.deepCloneTable(self._rawData)
 			data.MetaData = self.MetaData
 			data.UserIds = self.UserIds
 			if unlock then

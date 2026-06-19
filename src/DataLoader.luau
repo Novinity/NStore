@@ -60,6 +60,10 @@ local function PlayerAdded(player: Player)
 			player:Kick(`Profile session end - Please rejoin`)
 		end)
 		
+		profile.Changed:Connect(function(old, new)
+			print("Profile changed!")
+		end)
+		
 		-- Connect a changed event to the Cash value
 		profile:OnChange("Cash", function(old, new)
 			print(`{player.DisplayName} has {new} cash! Was {old} cash.`)
