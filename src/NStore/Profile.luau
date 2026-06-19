@@ -1,5 +1,3 @@
-local HttpService = game:GetService("HttpService")
-
 local Signal = require(script.Parent.Signal)
 local Utils = require(script.Parent.Utils)
 
@@ -136,7 +134,7 @@ local function _proxyTable(target, path, onChange)
 		end,
 		-- print
 		__tostring = function()
-			return `\{\n{Utils.tableToString(target, 6)}\n\}`
+			return `\{\n{Utils.tableToString(target)}\n\}`
 		end,
 	}), target
 end

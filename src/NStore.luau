@@ -8,6 +8,7 @@
 	- Data autosaving
 	- Session locking
 	- Data reconciliation
+	- Per-key changed events
 ]]
 
 local DataStoreService = game:GetService("DataStoreService")
