@@ -109,24 +109,3 @@ end
 -- Connect events
 Players.PlayerAdded:Connect(PlayerAdded)
 Players.PlayerRemoving:Connect(PlayerRemoving)
-
--- When the server closes, call PlayerRemoving for all players
-game:BindToClose(function()
-	for _, player in Players:GetPlayers() do
-		task.spawn(PlayerRemoving, player)
-	end
-	
-	-- Wait until all profiles have been deinitialized before exiting the function
-	local finished = false
-	repeat
-		local count = 0
-		for _ in pairs(Profiles) do
-			count += 1
-		end
-		if count == 0 then
-			finished = true
-		else
-			task.wait()
-		end
-	until finished
-end)

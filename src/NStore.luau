@@ -54,8 +54,31 @@ function NStore.new(name: string, template: {}, autoSaveInterval: number?)
 	
 	self.IsClosing = false
 	
+	-- Save all profiles when server is closing
 	game:BindToClose(function()
 		self.IsClosing = true
+
+		local function save(profile)
+			-- Save profile only if it isn't already released
+			if not profile.Released then
+				profile:Save(true)
+			end
+		end
+
+		for _, profile in Profile.LoadedProfiles do
+			task.spawn(save, profile)
+		end
+
+		-- Wait for all profiles to be saved before letting the server close
+		local loaded = 0
+		repeat
+			task.wait()
+			loaded = 0
+			for _, profile in Profile.LoadedProfiles do
+				loaded += 1
+			end
+		until loaded == 0
+		print("All profiles saved.")
 	end)
 
 	print(`New NStore instance initialized: {name}`)
